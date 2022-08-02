@@ -69,7 +69,12 @@ def a_star_search_backward_pass(came_from, start, goal):
 ###############################
 
 from ..lattice import Lattice
-from ..graph_utils import adjacent_plaquettes, vertex_neighbours
+from ..graph_utils import (
+    adjacent_plaquettes,
+    vertex_neighbours,
+    closest_plaquette,
+    closest_vertex,
+)
 
 
 def straight_line_length(a, b) -> float:
@@ -178,3 +183,70 @@ def path_between_vertices(
         start, goal, _heuristic, adjacency, early_stopping, maxits
     )
     return a_star_search_backward_pass(came_from, start, goal)
+
+
+def _round_the_back_metric(x=False, y=False):
+    """
+    A metric function that prefers to go around the major or minor axis of the torus
+    Used to trick the path finder into a giving a path that goes around such an axis
+    """
+
+    def length(a, b) -> float:
+        delta = a - b
+        if x:
+            delta[0] = 1 - delta[0]
+        if y:
+            delta[1] = 1 - delta[1]
+        return np.linalg.norm(delta, ord=2)
+
+    return length
+
+
+def __loop(lattice, direction, kind, center=0.5):
+    """Construct loops on the torus,
+    either on the dual or the normal lattice
+    and in either the x or y direction
+    """
+    if kind == "graph":
+        closest_thing = closest_vertex
+        path = path_between_vertices
+    elif kind == "dual":
+        closest_thing = closest_plaquette
+        path = path_between_plaquettes
+    else:
+        assert False
+
+    points = np.array([[0.1, center], [0.5, center], [0.9, center]])
+    if direction == "y":
+        points = points[:, ::-1]
+    a, b, c = [closest_thing(lattice, p) for p in points]
+    heuristic = _round_the_back_metric(x=(direction == "x"), y=(direction == "y"))
+
+    t1, e1 = path(lattice, a, b)
+    t2, e2 = path(lattice, b, c)
+    t3, e3 = path(lattice, c, a, heuristic=heuristic)
+
+    return np.concatenate([t1[:-1], t2[:-1], t3[:-1]], axis=0), np.concatenate(
+        [e1, e2, e3], axis=0
+    )
+
+
+def graph_loop(lattice, direction="x", center=0.5):
+    """Construct a loop winding around the torus in the 'direction' direction.
+    If direction == 'x' then it will pass near y = center and vice versa
+
+    Returns the indices of vertices and edges in the loop
+    as well as +/-1 indicating if we traverse that edge in the forward or backward sense
+    """
+    verts, edges = __loop(lattice, direction=direction, kind="graph", center=center)
+    directions = 2 * np.equal(verts, lattice.edges.indices[edges][:, 0]) - 1
+    return verts, edges, directions
+
+
+def dual_loop(lattice, direction="x"):
+    """Construct a loop winding around the torus in the 'direction' direction.
+    If direction == 'x' then it will pass near y = center and vice versa
+
+    Returns the indices of vertices and edges in the loop
+    """
+    return __loop(lattice, direction=direction, kind="dual")
